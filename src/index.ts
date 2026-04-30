@@ -371,8 +371,8 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     throw new Error(`RETRYABLE:status=${status}`);
   };
 
-  // Poll every 2 seconds, up to ~60 seconds (fast tier should be quick)
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  // Poll every 2 seconds, up to ~90 seconds (45 attempts)
+  for (let attempt = 0; attempt < 45; attempt += 1) {
     try {
       const result = await poll();
       return result;
@@ -382,7 +382,7 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
       await sleep(2000);
     }
   }
-  throw new Error("Parse job timed out after 60 seconds");
+  throw new Error("Parse job timed out after 90 seconds");
 }
 
 function selectCategoryFromVendor(vendor: string | null): Category | null {
