@@ -328,7 +328,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
 async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<string> {
   const poll = async (): Promise<string> => {
     const response = await fetch(
-      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=markdown,markdown_full`,
+      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=markdown_full`,
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -348,7 +348,7 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     const status = json?.job?.status ?? json?.status;
 
     if (status === "completed") {
-      const markdown = json?.job?.markdown_full ?? json?.markdown_full ?? json?.result?.markdown;
+      const markdown = json?.markdown_full ?? json?.job?.markdown_full;
       if (!markdown || typeof markdown !== "string") {
         throw new Error("Parse completed but no markdown content available");
       }
@@ -363,18 +363,18 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     throw new Error(`RETRYABLE:status=${status}`);
   };
 
-  // Poll every 2 seconds, up to ~60 seconds
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  // Poll every 3 seconds, up to ~120 seconds (40 attempts)
+  for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       const result = await poll();
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.startsWith("RETRYABLE:")) throw err;
-      await sleep(2000);
+      await sleep(3000);
     }
   }
-  throw new Error("Parse job timed out after 60 seconds");
+  throw new Error("Parse job timed out after 120 seconds");
 }
 
 function selectCategoryFromVendor(vendor: string | null): Category | null {
