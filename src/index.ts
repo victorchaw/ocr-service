@@ -131,10 +131,15 @@ function parseLlamaMarkdown(markdown: string): ParsedStatement {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const candidateVendor =
+  // Vendor detection: markdown heading -> receipt/folio keywords -> first line fallback
+  let candidateVendor =
     lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "") ??
-    lines.find((line) => /hotel|inn|resort|receipt|folio/i.test(line) && !line.includes("|")) ??
-    null;
+    lines.find((line) => /hotel|inn|resort|receipt|folio/i.test(line) && !line.includes("|"));
+
+  if (!candidateVendor && lines.length > 0) {
+    // Fallback: first line often contains the store/restaurant name
+    candidateVendor = lines[0];
+  }
 
   const markdownRows = lines
     .filter((line) => line.includes("|"))
@@ -217,7 +222,7 @@ function parseLlamaMarkdown(markdown: string): ParsedStatement {
   const firstDate = lineItems.find((item) => item.date)?.date ?? extractDateValue(markdown);
 
   return {
-    vendor: candidateVendor,
+    vendor: candidateVendor ?? null,
     date: firstDate,
     line_items: lineItems,
     tax_total: taxTotal,
@@ -306,7 +311,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
       },
       body: JSON.stringify({
         file_id: fileId,
-        tier: "cost_effective",  // supports markdown; use "fast" for text-only (cheaper/faster)
+        tier: "fast",  // fast tier returns text only; we parse plain text
         version: "latest",
       }),
     });
@@ -328,7 +333,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
 async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<string> {
   const poll = async (): Promise<string> => {
     const response = await fetch(
-      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=markdown_full`,
+      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=text_full`,
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -348,11 +353,11 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     const status = json?.job?.status ?? json?.status;
 
     if (status === "completed") {
-      const markdown = json?.markdown_full ?? json?.job?.markdown_full;
-      if (!markdown || typeof markdown !== "string") {
-        throw new Error("Parse completed but no markdown content available");
+      const text = json?.text_full ?? json?.job?.text_full;
+      if (!text || typeof text !== "string") {
+        throw new Error("Parse completed but no text content available");
       }
-      return markdown;
+      return text;
     }
 
     if (status === "error" || status === "failed") {
@@ -363,18 +368,18 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     throw new Error(`RETRYABLE:status=${status}`);
   };
 
-  // Poll every 3 seconds, up to ~120 seconds (40 attempts)
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  // Poll every 2 seconds, up to ~60 seconds (fast tier should be quick)
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const result = await poll();
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.startsWith("RETRYABLE:")) throw err;
-      await sleep(3000);
+      await sleep(2000);
     }
   }
-  throw new Error("Parse job timed out after 120 seconds");
+  throw new Error("Parse job timed out after 60 seconds");
 }
 
 function selectCategoryFromVendor(vendor: string | null): Category | null {
