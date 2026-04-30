@@ -344,30 +344,35 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
       }
     );
 
+    const responseText = await response.text();
     if (!response.ok) {
-      const body = await response.text();
+      console.error(`[poll] job ${jobId} poll error ${response.status}: ${responseText}`);
       if (response.status === 404 || response.status === 425) {
         throw new Error(`RETRYABLE:${response.status}`);
       }
-      throw new Error(`Parse job poll failed (${response.status}): ${body}`);
+      throw new Error(`Parse job poll failed (${response.status}): ${responseText}`);
     }
 
-    const json = await response.json();
+    const json = JSON.parse(responseText);
     const status = json?.job?.status ?? json?.status;
+    console.log(`[poll] job ${jobId} status=${status}`);
 
-    if (status === "completed") {
+    if (status === "COMPLETED") {
       const text = json?.text_full ?? json?.job?.text_full;
       if (!text || typeof text !== "string") {
+        console.error(`[poll] job ${jobId} completed but no text_full in response: ${JSON.stringify(Object.keys(json))}`);
         throw new Error("Parse completed but no text content available");
       }
+      console.log(`[poll] job ${jobId} got text (${text.length} chars)`);
       return text;
     }
 
-    if (status === "error" || status === "failed") {
+    if (status === "FAILED" || status === "CANCELLED") {
       const errorMsg = json?.job?.error_message ?? json?.error_message ?? "Parse job failed";
-      throw new Error(`Parse job failed: ${errorMsg}`);
+      throw new Error(`Parse job ${status}: ${errorMsg}`);
     }
 
+    // PENDING, RUNNING, etc.
     throw new Error(`RETRYABLE:status=${status}`);
   };
 
@@ -375,13 +380,22 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
   for (let attempt = 0; attempt < 45; attempt += 1) {
     try {
       const result = await poll();
+      console.log(`[poll] job ${jobId} COMPLETED, returned ${result.length} chars`);
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.startsWith("RETRYABLE:")) throw err;
+      if (!msg.startsWith("RETRYABLE:")) {
+        console.error(`[poll] job ${jobId} attempt ${attempt+1} error: ${msg}`);
+        throw err;
+      }
+      // Log status occasionally
+      if (attempt % 5 === 0) {
+        console.log(`[poll] job ${jobId} attempt ${attempt+1} retry: ${msg}`);
+      }
       await sleep(2000);
     }
   }
+  console.error(`[poll] job ${jobId} timed out after 90 seconds`);
   throw new Error("Parse job timed out after 90 seconds");
 }
 
