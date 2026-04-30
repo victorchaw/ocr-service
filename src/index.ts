@@ -115,34 +115,6 @@ function inferFileExtension(mimeType: string): string {
   return "jpg";
 }
 
-// ─── LlamaParse Integration ───────────────────────────────────────────────────
-const LLAMAPARSE_API_KEY = process.env.LLAMAPARSE_API_KEY;
-const LLAMA_UPLOAD_BASES = [
-  "https://api.cloud.llamaindex.ai/api/v1/parsing",
-  "https://api.cloud.llamaindex.ai/api/parsing",
-];
-
-type ParsedLineItem = {
-  date: string | null;
-  description: string;
-  amount: number;
-  confidence?: number;
-};
-
-type ParsedStatement = {
-  vendor: string | null;
-  date: string | null;
-  line_items: ParsedLineItem[];
-  tax_total: number;
-  grand_total: number;
-  field_confidence?: {
-    vendor?: number;
-    date?: number;
-    tax_total?: number;
-    grand_total?: number;
-  };
-};
-
 function extractLastMoneyValue(text: string): number | null {
   const matches = text.match(/-?\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g);
   if (!matches || matches.length === 0) return null;
@@ -260,6 +232,150 @@ function parseLlamaMarkdown(markdown: string): ParsedStatement {
   };
 }
 
+async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<string> {
+  const { blob, extension } = await imagePayloadToBlob(imageInput);
+  const fileId = await uploadFileToLlamaParse(blob, extension, apiKey);
+  const jobId = await createParseJob(fileId, apiKey);
+  return await pollParseJobForMarkdown(jobId, apiKey);
+}
+
+// ─── LlamaParse Integration ───────────────────────────────────────────────────
+const LLAMAPARSE_API_KEY = process.env.LLAMAPARSE_API_KEY;
+const LLAMA_API_BASE = "https://api.cloud.llamaindex.ai";
+
+type ParsedLineItem = {
+  date: string | null;
+  description: string;
+  amount: number;
+  confidence?: number;
+};
+
+type ParsedStatement = {
+  vendor: string | null;
+  date: string | null;
+  line_items: ParsedLineItem[];
+  tax_total: number;
+  grand_total: number;
+  field_confidence?: {
+    vendor?: number;
+    date?: number;
+    tax_total?: number;
+    grand_total?: number;
+  };
+};
+
+async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: string): Promise<string> {
+  const tryUpload = async (): Promise<string> => {
+    const formData = new FormData();
+    formData.append("file", blob, { filename: `receipt.${extension}` });
+    formData.append("purpose", "parse");
+
+    const formHeaders = formData.getHeaders ? formData.getHeaders() : {};
+
+    const response = await fetch(`${LLAMA_API_BASE}/api/v1/beta/files`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...formHeaders,
+      },
+      body: formData as any,
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`File upload failed (${response.status}): ${body}`);
+    }
+
+    const json = await response.json();
+    const fileId = json?.id;
+    if (!fileId) throw new Error("File upload succeeded but no file ID returned");
+    return String(fileId);
+  };
+
+  return await retryWithBackoff(tryUpload);
+}
+
+async function createParseJob(fileId: string, apiKey: string): Promise<string> {
+  const tryCreate = async (): Promise<string> => {
+    const response = await fetch(`${LLAMA_API_BASE}/api/v2/parse`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        file_id: fileId,
+        tier: "fast",
+        version: "latest",
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Parse job creation failed (${response.status}): ${body}`);
+    }
+
+    const json = await response.json();
+    const jobId = json?.job?.id ?? json?.id;
+    if (!jobId) throw new Error("Parse job created but no job ID returned");
+    return String(jobId);
+  };
+
+  return await retryWithBackoff(tryCreate);
+}
+
+async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<string> {
+  const poll = async (): Promise<string> => {
+    const response = await fetch(
+      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=markdown,markdown_full`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.text();
+      if (response.status === 404 || response.status === 425) {
+        throw new Error(`RETRYABLE:${response.status}`);
+      }
+      throw new Error(`Parse job poll failed (${response.status}): ${body}`);
+    }
+
+    const json = await response.json();
+    const status = json?.job?.status ?? json?.status;
+
+    if (status === "completed") {
+      const markdown = json?.job?.markdown_full ?? json?.markdown_full ?? json?.result?.markdown;
+      if (!markdown || typeof markdown !== "string") {
+        throw new Error("Parse completed but no markdown content available");
+      }
+      return markdown;
+    }
+
+    if (status === "error" || status === "failed") {
+      const errorMsg = json?.job?.error_message ?? json?.error_message ?? "Parse job failed";
+      throw new Error(`Parse job failed: ${errorMsg}`);
+    }
+
+    throw new Error(`RETRYABLE:status=${status}`);
+  };
+
+  // Poll every 2 seconds, up to ~60 seconds
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const result = await poll();
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.startsWith("RETRYABLE:")) throw err;
+      await sleep(2000);
+    }
+  }
+  throw new Error("Parse job timed out after 60 seconds");
+}
+
 function selectCategoryFromVendor(vendor: string | null): Category | null {
   const name = (vendor || "").toLowerCase();
   if (name.includes("hotel") || name.includes("inn") || name.includes("resort")) return "Travel";
@@ -275,13 +391,7 @@ function selectCategoryFromVendor(vendor: string | null): Category | null {
   return null;
 }
 
-interface LlamaParseUploadResponse {
-  id?: string;
-  job_id?: string;
-  jobId?: string;
-  parsing_job_id?: string;
-  data?: { id?: string; job_id?: string };
-}
+
 
 const VALID_CATEGORIES = [
   "Food",
@@ -318,113 +428,7 @@ async function imagePayloadToBlob(payload: string): Promise<{ blob: Buffer; mime
   throw new Error("Remote URL fetching from client not supported in standalone mode; please upload image as multipart/form-data or base64 JSON");
 }
 
-async function fetchLlamaParseMarkdown(base: string, jobId: string, apiKey: string): Promise<string> {
-  const endpoint = `${base}/job/${jobId}/result/markdown`;
 
-  const attemptFetch = async (): Promise<string> => {
-    const response = await fetch(endpoint, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-
-    if (response.ok) {
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const json = await response.json();
-        const markdown =
-          json?.markdown ??
-          json?.content ??
-          json?.result?.markdown ??
-          json?.result?.content ??
-          json?.data?.markdown;
-        if (!markdown || typeof markdown !== "string") {
-          throw new Error("LlamaParse returned an empty markdown result");
-        }
-        return markdown;
-      }
-
-      const markdownText = await response.text();
-      if (!markdownText.trim()) throw new Error("LlamaParse returned empty markdown text");
-      return markdownText;
-    }
-
-    if ([202, 404, 409, 425, 429, 500, 502, 503, 504].includes(response.status)) {
-      const body = await response.text();
-      throw new Error(`Retryable error (${response.status}): ${body}`);
-    }
-
-    const body = await response.text();
-    throw new Error(`LlamaParse result fetch failed (${response.status}): ${body}`);
-  };
-
-  try {
-    return await retryWithBackoff(attemptFetch, 6, 1500);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("401") || msg.includes("403") || msg.includes("Invalid API key")) {
-      throw new Error("LlamaParse authentication failed. Check your API key.");
-    }
-    throw err;
-  }
-}
-
-async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<string> {
-  const { blob, extension } = await imagePayloadToBlob(imageInput);
-  let lastError: unknown;
-  for (const base of LLAMA_UPLOAD_BASES) {
-    try {
-      const jobId = await uploadToLlamaParse(blob, extension, apiKey, base);
-      return await fetchLlamaParseMarkdown(base, jobId, apiKey);
-    } catch (err) {
-      lastError = err;
-      // Continue to next base if available
-    }
-  }
-  throw lastError;
-}
-
-async function uploadToLlamaParse(blob: Buffer, extension: string, apiKey: string, base: string): Promise<string> {
-  const tryUpload = async (): Promise<string> => {
-    const formData = new FormData();
-    formData.append("file", blob, { filename: `receipt.${extension}` });
-    formData.append("result_type", "markdown");
-    formData.append("parse_mode", "parse_document_with_agent");
-    formData.append("extract_charts", "false");
-
-    // Get form-data headers (includes Content-Type with boundary)
-    const formHeaders = formData.getHeaders ? formData.getHeaders() : {};
-
-    const response = await fetch(base + "/upload", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        ...formHeaders,
-      },
-      body: formData as any,
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Upload failed (${response.status}): ${body}`);
-    }
-
-    const uploadJson: LlamaParseUploadResponse = await response.json();
-    const jobId =
-      uploadJson?.id ??
-      uploadJson?.job_id ??
-      uploadJson?.jobId ??
-      uploadJson?.parsing_job_id ??
-      uploadJson?.data?.id ??
-      uploadJson?.data?.job_id;
-
-    if (!jobId) throw new Error("LlamaParse upload succeeded but no job id returned");
-
-    return String(jobId);
-  };
-
-  return await retryWithBackoff(tryUpload);
-}
 
 // ─── Main scanning logic ───────────────────────────────────────────────────────
 interface ScanResult {
