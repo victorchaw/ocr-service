@@ -246,7 +246,7 @@ async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<
 // ─── LlamaParse Integration ───────────────────────────────────────────────────
 const LLAMAPARSE_API_KEY = process.env.LLAMAPARSE_API_KEY;
 const LLAMA_API_BASE = "https://api.cloud.llamaindex.ai";
-const PARSE_TIER = "fast";  // "fast" = text only, <60s ; "cost_effective"/"agentic" = markdown but slower
+const PARSE_TIER = "cost_effective";  // testing alternative tier
 
 console.log(`[config] LlamaParse tier: ${PARSE_TIER}`);
 
