@@ -232,8 +232,8 @@ function parseLlamaMarkdown(markdown: string): ParsedStatement {
 }
 
 async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<string> {
-  const { blob, extension } = await imagePayloadToBlob(imageInput);
-  const fileId = await uploadFileToLlamaParse(blob, extension, apiKey);
+  const { blob, mimeType, extension } = await imagePayloadToBlob(imageInput);
+  const fileId = await uploadFileToLlamaParse(blob, extension, mimeType, apiKey);
   const jobId = await createParseJob(fileId, apiKey);
   return await pollParseJobForMarkdown(jobId, apiKey);
 }
@@ -263,14 +263,13 @@ type ParsedStatement = {
   };
 };
 
-async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: string): Promise<string> {
+async function uploadFileToLlamaParse(blob: Buffer, extension: string, mimeType: string, apiKey: string): Promise<string> {
   const tryUpload = async (): Promise<string> => {
-    // Use native FormData (no import needed — global in Node 18+)
     const formData = new FormData();
-    formData.append("file", new Blob([blob as any]), `receipt.${extension}`);
+    formData.append("file", new Blob([blob as any], { type: mimeType }), `receipt.${extension}`);
     formData.append("purpose", "parse");
 
-    console.log("[upload] File size:", blob.length, "extension:", extension);
+    console.log("[upload] File size:", blob.length, "mime:", mimeType, "ext:", extension);
 
     const response = await fetch(`${LLAMA_API_BASE}/api/v1/beta/files`, {
       method: "POST",
@@ -294,8 +293,8 @@ async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: s
     return String(fileId);
   };
 
-   return await retryWithBackoff(tryUpload);
- }
+  return await retryWithBackoff(tryUpload);
+  }
 
 async function createParseJob(fileId: string, apiKey: string): Promise<string> {
   const tryCreate = async (): Promise<string> => {
