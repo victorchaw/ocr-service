@@ -23,7 +23,6 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import dotenv from "dotenv";
-import FormData from "form-data";
 
 // Load environment variables
 dotenv.config();
@@ -266,26 +265,23 @@ type ParsedStatement = {
 
 async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: string): Promise<string> {
   const tryUpload = async (): Promise<string> => {
+    // Use native FormData (no import needed — global in Node 18+)
     const formData = new FormData();
-    formData.append("file", blob, { filename: `receipt.${extension}` });
+    formData.append("file", new Blob([blob as any]), `receipt.${extension}`);
     formData.append("purpose", "parse");
 
     console.log("[upload] File size:", blob.length, "extension:", extension);
-
-    const formHeaders = formData.getHeaders ? formData.getHeaders() : {};
-    console.log("[upload] Form headers:", JSON.stringify(formHeaders));
 
     const response = await fetch(`${LLAMA_API_BASE}/api/v1/beta/files`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        ...formHeaders,
       },
-      body: formData as any,
+      body: formData,
     });
 
     const responseText = await response.text();
-    console.log("[upload] Response status:", response.status);
+    console.log("[upload] Response status:", response.status, response.statusText);
     console.log("[upload] Response body:", responseText);
 
     if (!response.ok) {
@@ -298,8 +294,8 @@ async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: s
     return String(fileId);
   };
 
-  return await retryWithBackoff(tryUpload);
-  }
+   return await retryWithBackoff(tryUpload);
+ }
 
 async function createParseJob(fileId: string, apiKey: string): Promise<string> {
   const tryCreate = async (): Promise<string> => {
