@@ -246,6 +246,9 @@ async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<
 // ─── LlamaParse Integration ───────────────────────────────────────────────────
 const LLAMAPARSE_API_KEY = process.env.LLAMAPARSE_API_KEY;
 const LLAMA_API_BASE = "https://api.cloud.llamaindex.ai";
+const PARSE_TIER = "fast";  // "fast" = text only, <60s ; "cost_effective"/"agentic" = markdown but slower
+
+console.log(`[config] LlamaParse tier: ${PARSE_TIER}`);
 
 type ParsedLineItem = {
   date: string | null;
@@ -311,7 +314,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
       },
       body: JSON.stringify({
         file_id: fileId,
-        tier: "fast",  // fast tier returns text only; we parse plain text
+        tier: PARSE_TIER,  // fast, cost_effective, agentic, agentic_plus
         version: "latest",
       }),
     });
