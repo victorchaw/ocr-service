@@ -246,7 +246,7 @@ async function parseWithLlamaParse(imageInput: string, apiKey: string): Promise<
 // ─── LlamaParse Integration ───────────────────────────────────────────────────
 const LLAMAPARSE_API_KEY = process.env.LLAMAPARSE_API_KEY;
 const LLAMA_API_BASE = "https://api.cloud.llamaindex.ai";
-const PARSE_TIER = "cost_effective";  // testing alternative tier
+const PARSE_TIER = "cost_effective";  // cost_effective supports markdown; fast is text-only but may be slower on free tier queue
 
 console.log(`[config] LlamaParse tier: ${PARSE_TIER}`);
 
@@ -336,7 +336,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
 async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<string> {
   const poll = async (): Promise<string> => {
     const response = await fetch(
-      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=text_full`,
+      `${LLAMA_API_BASE}/api/v2/parse/${jobId}?expand=markdown_full`,
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -358,13 +358,13 @@ async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<s
     console.log(`[poll] job ${jobId} status=${status}`);
 
     if (status === "COMPLETED") {
-      const text = json?.text_full ?? json?.job?.text_full;
-      if (!text || typeof text !== "string") {
-        console.error(`[poll] job ${jobId} completed but no text_full in response: ${JSON.stringify(Object.keys(json))}`);
-        throw new Error("Parse completed but no text content available");
+      const markdown = json?.markdown_full ?? json?.job?.markdown_full;
+      if (!markdown || typeof markdown !== "string") {
+        console.error(`[poll] job ${jobId} completed but no markdown_full in response: ${JSON.stringify(Object.keys(json))}`);
+        throw new Error("Parse completed but no markdown content available");
       }
-      console.log(`[poll] job ${jobId} got text (${text.length} chars)`);
-      return text;
+      console.log(`[poll] job ${jobId} got markdown (${markdown.length} chars)`);
+      return markdown;
     }
 
     if (status === "FAILED" || status === "CANCELLED") {
