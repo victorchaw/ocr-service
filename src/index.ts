@@ -270,7 +270,10 @@ async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: s
     formData.append("file", blob, { filename: `receipt.${extension}` });
     formData.append("purpose", "parse");
 
+    console.log("[upload] File size:", blob.length, "extension:", extension);
+
     const formHeaders = formData.getHeaders ? formData.getHeaders() : {};
+    console.log("[upload] Form headers:", JSON.stringify(formHeaders));
 
     const response = await fetch(`${LLAMA_API_BASE}/api/v1/beta/files`, {
       method: "POST",
@@ -281,19 +284,22 @@ async function uploadFileToLlamaParse(blob: Buffer, extension: string, apiKey: s
       body: formData as any,
     });
 
+    const responseText = await response.text();
+    console.log("[upload] Response status:", response.status);
+    console.log("[upload] Response body:", responseText);
+
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`File upload failed (${response.status}): ${body}`);
+      throw new Error(`File upload failed (${response.status}): ${responseText}`);
     }
 
-    const json = await response.json();
+    const json = JSON.parse(responseText);
     const fileId = json?.id;
     if (!fileId) throw new Error("File upload succeeded but no file ID returned");
     return String(fileId);
   };
 
   return await retryWithBackoff(tryUpload);
-}
+  }
 
 async function createParseJob(fileId: string, apiKey: string): Promise<string> {
   const tryCreate = async (): Promise<string> => {
