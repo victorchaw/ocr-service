@@ -306,7 +306,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
       },
       body: JSON.stringify({
         file_id: fileId,
-        tier: "fast",
+        tier: "cost_effective",  // supports markdown; use "fast" for text-only (cheaper/faster)
         version: "latest",
       }),
     });
@@ -323,7 +323,7 @@ async function createParseJob(fileId: string, apiKey: string): Promise<string> {
   };
 
   return await retryWithBackoff(tryCreate);
-}
+  }
 
 async function pollParseJobForMarkdown(jobId: string, apiKey: string): Promise<string> {
   const poll = async (): Promise<string> => {
